@@ -1,0 +1,774 @@
+import { useState, useEffect, useRef, useReducer, useCallback } from "react";
+
+const SQUARES = new Set([1,4,9,16,25,36,49,64,81,100,121,144]);
+const COLS4 = ["#FF6B6B","#4ECDC4","#45B7D1","#FFEAA7"];
+const ADMIN_PIN = "1234";
+
+function genQ(mode) {
+  const type = mode === "multiply" ? "mult" : mode === "divide" ? "div" : Math.random() < 0.5 ? "mult" : "div";
+  const a = Math.floor(Math.random() * 12) + 1;
+  const b = Math.floor(Math.random() * 12) + 1;
+  if (type === "mult") {
+    const ans = a * b;
+    return { text: a + " × " + b, answer: ans, isSquare: a === b && SQUARES.has(ans) };
+  }
+  return { text: (a * b) + " ÷ " + a, answer: b, isSquare: false };
+}
+
+function genChoices(answer) {
+  const s = new Set([answer]);
+  while (s.size < 4) {
+    const c = answer + Math.floor(Math.random() * 10) - 5;
+    if (c > 0 && c !== answer) s.add(c);
+  }
+  return [...s].sort(() => Math.random() - 0.5);
+}
+
+function makeQ(mode) {
+  const q = genQ(mode);
+  return { ...q, choices: genChoices(q.answer) };
+}
+
+function loadStorage(k) {
+  try { return JSON.parse(localStorage.getItem(k)) || []; } catch(e) { return []; }
+}
+function saveStorage(k, v) {
+  try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) {}
+}
+
+function createPanelState(mode) {
+  return { q: makeQ(mode), score: 0, stars: 0, flash: null, showStar: false, answered: false, total: 0, correct: 0 };
+}
+
+function panelReducer(state, action) {
+  if (action.type === "CORRECT") {
+    return { ...state, answered: true, flash: "correct", score: state.score + 1, total: state.total + 1, correct: state.correct + 1 };
+  }
+  if (action.type === "CORRECT_STAR") {
+    return { ...state, answered: true, flash: "correct", score: state.score + 2, stars: state.stars + 1, showStar: true, total: state.total + 1, correct: state.correct + 1 };
+  }
+  if (action.type === "WRONG") {
+    return { ...state, answered: true, flash: "wrong", total: state.total + 1 };
+  }
+  if (action.type === "HIDE_STAR") {
+    return { ...state, showStar: false };
+  }
+  if (action.type === "NEXT") {
+    return { ...state, q: makeQ(action.mode), answered: false, flash: null };
+  }
+  return state;
+}
+
+// ── Victory Screen ──
+function drawStar(ctx, cx, cy, spikes, outer, inner) {
+  let rot = (Math.PI / 2) * 3;
+  const step = Math.PI / spikes;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - outer);
+  for (let i = 0; i < spikes; i++) {
+    ctx.lineTo(cx + Math.cos(rot) * outer, cy + Math.sin(rot) * outer);
+    rot += step;
+    ctx.lineTo(cx + Math.cos(rot) * inner, cy + Math.sin(rot) * inner);
+    rot += step;
+  }
+  ctx.lineTo(cx, cy - outer);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function VictoryScreen({ winnerName, isDraw, onDone }) {
+  const canvasRef = useRef(null);
+  const partsRef = useRef([]);
+  const rafRef = useRef(null);
+  const [showText, setShowText] = useState(false);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    const PCOLS = ["#FF6B6B","#FFD700","#4ECDC4","#FF69B4","#45B7D1","#FFA500","#96CEB4","#ffffff"];
+
+    function burst(x, y, count, speed) {
+      for (let i = 0; i < count; i++) {
+        const angle = (Math.PI * 2 / count) * i + Math.random() * 0.4;
+        const sp = speed * (0.4 + Math.random() * 0.8);
+        partsRef.current.push({
+          x, y,
+          vx: Math.cos(angle) * sp,
+          vy: Math.sin(angle) * sp - Math.random() * 4,
+          r: 4 + Math.random() * 8,
+          color: PCOLS[Math.floor(Math.random() * PCOLS.length)],
+          life: 1,
+          decay: 0.012 + Math.random() * 0.018,
+          isStar: Math.random() < 0.3,
+          spin: (Math.random() - 0.5) * 0.3,
+          ang: Math.random() * Math.PI * 2,
+          gravity: 0.18 + Math.random() * 0.1,
+        });
+      }
+    }
+
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    burst(cx, cy, 120, 18);
+    const t1 = setTimeout(() => burst(cx * 0.3, cy * 0.8, 60, 14), 150);
+    const t2 = setTimeout(() => burst(cx * 1.7, cy * 0.8, 60, 14), 250);
+    const t3 = setTimeout(() => burst(cx * 0.6, cy * 1.2, 50, 12), 400);
+    const t4 = setTimeout(() => burst(cx * 1.4, cy * 1.2, 50, 12), 500);
+
+    const rainInterval = setInterval(() => {
+      for (let i = 0; i < 6; i++) {
+        partsRef.current.push({
+          x: Math.random() * canvas.width, y: -10,
+          vx: (Math.random() - 0.5) * 3,
+          vy: 2 + Math.random() * 3,
+          r: 4 + Math.random() * 6,
+          color: PCOLS[Math.floor(Math.random() * PCOLS.length)],
+          life: 1, decay: 0.008 + Math.random() * 0.01,
+          isStar: Math.random() < 0.4,
+          spin: (Math.random() - 0.5) * 0.2,
+          ang: Math.random() * Math.PI * 2,
+          gravity: 0.12,
+        });
+      }
+    }, 60);
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      partsRef.current = partsRef.current.filter(p => p.life > 0);
+      partsRef.current.forEach(p => {
+        ctx.save();
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle = p.color;
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.ang);
+        if (p.isStar) {
+          drawStar(ctx, 0, 0, 5, p.r, p.r * 0.45);
+        } else {
+          ctx.beginPath();
+          ctx.arc(0, 0, p.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += p.gravity;
+        p.vx *= 0.99;
+        p.ang += p.spin;
+        p.life -= p.decay;
+      });
+      rafRef.current = requestAnimationFrame(draw);
+    }
+
+    rafRef.current = requestAnimationFrame(draw);
+    const t5 = setTimeout(() => setShowText(true), 600);
+    const t6 = setTimeout(() => clearInterval(rainInterval), 4000);
+    const t7 = setTimeout(onDone, 4600);
+
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      clearInterval(rainInterval);
+      [t1,t2,t3,t4,t5,t6,t7].forEach(clearTimeout);
+    };
+  }, []);
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"#0a0a1a", zIndex:500, overflow:"hidden" }}>
+      <canvas ref={canvasRef} style={{ position:"absolute", inset:0, width:"100%", height:"100%" }} />
+      {showText && (
+        <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", pointerEvents:"none" }}>
+          <div style={{ fontSize:"clamp(4rem,12vw,8rem)", lineHeight:1, filter:"drop-shadow(0 0 30px gold)", animation:"crownIn 0.8s ease-out forwards" }}>
+            👑
+          </div>
+          <div style={{ fontSize:"clamp(2.5rem,8vw,6rem)", fontWeight:900, color:"#FFD700", textShadow:"0 0 30px #FFD700, 0 0 60px #FFA500, 0 4px 0 #B8860B", textAlign:"center", padding:"0 20px", animation:"nameIn 0.6s ease-out forwards" }}>
+            {isDraw ? "IT'S A DRAW!" : winnerName}
+          </div>
+          {!isDraw && (
+            <div style={{ fontSize:"clamp(1.2rem,4vw,2.5rem)", color:"#fff", fontWeight:"bold", marginTop:16, letterSpacing:4, animation:"nameIn 0.8s 0.3s ease-out both" }}>
+              WINS! 🎉
+            </div>
+          )}
+        </div>
+      )}
+      <style>{`
+        @keyframes crownIn { 0%{transform:translateY(-60px) scale(0.5);opacity:0} 70%{transform:translateY(10px) scale(1.1)} 100%{transform:translateY(0) scale(1);opacity:1} }
+        @keyframes nameIn  { 0%{transform:scale(0.3);opacity:0} 60%{transform:scale(1.1)} 100%{transform:scale(1);opacity:1} }
+      `}</style>
+    </div>
+  );
+}
+
+// ── Star burst ──
+function StarBurst() {
+  return (
+    <>
+      <div style={{ position:"absolute", top:"40%", left:"50%", fontSize:"2rem", zIndex:10, pointerEvents:"none", transform:"translate(-50%,-50%)", animation:"sbPop 0.9s ease-out forwards" }}>
+        ⭐+2
+      </div>
+      <style>{`@keyframes sbPop{0%{transform:translate(-50%,-50%) scale(0);opacity:1}60%{transform:translate(-50%,-60%) scale(1.8)}100%{transform:translate(-50%,-80%) scale(2);opacity:0}}`}</style>
+    </>
+  );
+}
+
+// ── Mode Selector ──
+function ModeSelector({ label, onSelect }) {
+  const modes = [
+    { id:"multiply", icon:"✖️", title:"Multiplication Only", sub:"Times tables up to 12×12", bg:"#FF6B6B" },
+    { id:"divide",   icon:"➗", title:"Division Only",       sub:"Division facts up to 144÷12", bg:"#45B7D1" },
+    { id:"mixed",    icon:"🔀", title:"Mixed",               sub:"Both multiplication & division", bg:"#96CEB4" },
+  ];
+  return (
+    <div style={S.center}>
+      <div style={S.card}>
+        <div style={{ fontSize:"2.5rem", marginBottom:8 }}>🎮</div>
+        <h2 style={S.title}>{label || "Choose Game Mode"}</h2>
+        <p style={{ color:"#888", fontSize:"0.9rem", marginBottom:20 }}>What type of questions?</p>
+        {modes.map(m => (
+          <button key={m.id} onClick={() => onSelect(m.id)} style={{ ...S.btn, background:m.bg, marginTop:12, flexDirection:"column", display:"flex", alignItems:"center", gap:2 }}>
+            <span style={{ fontWeight:"bold" }}>{m.icon} {m.title}</span>
+            <span style={{ fontSize:"0.8rem", opacity:0.85, fontWeight:"normal" }}>{m.sub}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Energy Bar ──
+function EnergyBar({ p1score, p2score, p1name, p2name }) {
+  const total = p1score + p2score;
+  const pct = total === 0 ? 50 : (p1score / total) * 100;
+  const p1win = p1score > p2score;
+  const p2win = p2score > p1score;
+  const clashColor = p1win ? "#ffaa00" : p2win ? "#00eeff" : "#ffffff";
+  const clashSize = p1win || p2win ? 52 : 40;
+  const f1x = Math.max(4, pct - 10 + (0.5 - pct / 100) * 60);
+  const f2x = Math.min(96, pct + 10 + (pct / 100 - 0.5) * 60);
+
+  return (
+    <div style={{ position:"relative", width:"100%", height:64, background:"#0a0a1a", overflow:"hidden", flexShrink:0 }}>
+      <div style={{ position:"absolute", left:0, top:"50%", transform:"translateY(-50%)", width:Math.max(pct,2)+"%", height:p1win?18:10, zIndex:3, transition:"width 0.4s, height 0.3s" }}>
+        <div style={{ position:"absolute", inset:0, background:"linear-gradient(90deg,#ff2200,#ff6600,#ffaa00,#fff)", borderRadius:"0 4px 4px 0", boxShadow:"0 0 12px 4px #ff4400" }} />
+      </div>
+      <div style={{ position:"absolute", right:0, top:"50%", transform:"translateY(-50%)", width:Math.max(100-pct,2)+"%", height:p2win?18:10, zIndex:3, transition:"width 0.4s, height 0.3s" }}>
+        <div style={{ position:"absolute", inset:0, background:"linear-gradient(270deg,#0044ff,#0099ff,#00eeff,#fff)", borderRadius:"4px 0 0 4px", boxShadow:"0 0 12px 4px #0066ff" }} />
+      </div>
+      <div style={{ position:"absolute", left:pct+"%", top:"50%", transform:"translate(-50%,-50%)", zIndex:10, width:clashSize, height:clashSize, transition:"left 0.4s" }}>
+        <div style={{ position:"absolute", inset:0, borderRadius:"50%", background:"radial-gradient(circle,#fff 0%,"+clashColor+" 40%,transparent 70%)", boxShadow:"0 0 16px 6px "+clashColor }} />
+      </div>
+      <div style={{ position:"absolute", left:f1x+"%", bottom:2, transform:"translateX(-50%)", zIndex:8, fontSize:"1.4rem", transition:"left 0.4s", filter:p1win?"drop-shadow(0 0 6px #ff6600)":"none" }}>🔴</div>
+      <div style={{ position:"absolute", left:f2x+"%", bottom:2, transform:"translateX(-50%)", zIndex:8, fontSize:"1.4rem", transition:"left 0.4s", filter:p2win?"drop-shadow(0 0 6px #00aaff)":"none" }}>🔵</div>
+      <div style={{ position:"absolute", top:4, left:8, color:"#FF6B6B", fontWeight:"bold", fontSize:"0.8rem", zIndex:20, textShadow:"0 0 6px #FF6B6B" }}>{p1name}: {p1score}</div>
+      <div style={{ position:"absolute", top:4, right:8, color:"#45B7D1", fontWeight:"bold", fontSize:"0.8rem", zIndex:20, textShadow:"0 0 6px #45B7D1" }}>{p2score}: {p2name}</div>
+    </div>
+  );
+}
+
+// ── Player Panel ──
+function PlayerPanel({ name, color, accentBg, gameActive, mode, onScoreChange, onStarsChange, onStatsChange }) {
+  const init = useCallback(() => createPanelState(mode), []);
+  const [st, dispatch] = useReducer(panelReducer, null, init);
+  const { q, score, stars, flash, showStar, answered, total, correct } = st;
+
+  const prevScore = useRef(0);
+  const prevStars = useRef(0);
+
+  useEffect(() => {
+    if (score !== prevScore.current) { prevScore.current = score; onScoreChange(score); }
+  });
+  useEffect(() => {
+    if (stars !== prevStars.current) { prevStars.current = stars; onStarsChange(stars); }
+  });
+  useEffect(() => {
+    onStatsChange({ total, correct });
+  }, [total, correct]);
+
+  const tRef = useRef(null);
+  const next = useCallback((delay) => {
+    if (tRef.current) clearTimeout(tRef.current);
+    tRef.current = setTimeout(() => dispatch({ type:"NEXT", mode }), delay);
+  }, [mode]);
+
+  const pick = useCallback((c) => {
+    if (answered || !gameActive) return;
+    if (c === q.answer) {
+      if (q.isSquare) {
+        dispatch({ type:"CORRECT_STAR" });
+        tRef.current = setTimeout(() => { dispatch({ type:"HIDE_STAR" }); next(150); }, 900);
+      } else {
+        dispatch({ type:"CORRECT" });
+        next(380);
+      }
+    } else {
+      dispatch({ type:"WRONG" });
+      next(480);
+    }
+  }, [answered, gameActive, q, next]);
+
+  useEffect(() => () => { if (tRef.current) clearTimeout(tRef.current); }, []);
+
+  const bg = flash === "correct" ? "#d4f7d4" : flash === "wrong" ? "#ffd5d5" : "#fff";
+  const acc = total > 0 ? Math.round((correct / total) * 100) : null;
+
+  return (
+    <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", background:bg, transition:"background 0.25s", borderRadius:20, padding:"18px 14px", position:"relative", boxShadow:"0 4px 20px "+color+"55", border:"3px solid "+color }}>
+      {showStar && <StarBurst />}
+      <div style={{ background:color, color:"#fff", borderRadius:12, padding:"7px 28px", fontWeight:"bold", fontSize:"1.5rem", marginBottom:10 }}>{name}</div>
+      <div style={{ display:"flex", gap:14, marginBottom:10, alignItems:"center", flexWrap:"wrap", justifyContent:"center" }}>
+        <div style={{ fontSize:"2rem", fontWeight:"bold", color }}>{score} pts</div>
+        {acc !== null && <div style={{ fontSize:"0.9rem", background:"#f0f0f0", borderRadius:8, padding:"3px 10px", color:"#555" }}>🎯 {acc}%</div>}
+        <div style={{ fontSize:"1rem" }}>{stars > 0 ? Array(stars).fill("⭐").join("") : <span style={{ color:"#ccc", fontSize:"0.8rem" }}>no ⭐</span>}</div>
+      </div>
+      {q.isSquare && <div style={{ background:"#fff8e1", border:"2px solid #ffd700", borderRadius:8, padding:"3px 10px", fontSize:"0.78rem", fontWeight:"bold", color:"#b8860b", marginBottom:8 }}>⭐ Squared! +2 pts!</div>}
+      <div style={{ fontSize:"clamp(1.8rem,3.5vw,3rem)", fontWeight:"bold", color:"#222", background:accentBg, borderRadius:14, padding:"14px 20px", marginBottom:14, width:"100%", textAlign:"center", boxSizing:"border-box" }}>
+        {q.text} = ?
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, width:"100%" }}>
+        {q.choices.map((c, i) => {
+          let cbg = COLS4[i];
+          if (answered) cbg = c === q.answer ? "#4CAF50" : "#ccc";
+          return (
+            <button key={i} onPointerDown={() => pick(c)} style={{ padding:"clamp(12px,2vh,20px) 8px", borderRadius:14, border:"none", background:cbg, color:answered&&c!==q.answer?"#999":"#fff", fontSize:"clamp(1.3rem,2.2vw,1.9rem)", fontWeight:"bold", cursor:"pointer", boxShadow:"0 3px 8px rgba(0,0,0,0.12)", touchAction:"manipulation", userSelect:"none" }}>
+              {c}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Countdown ──
+function Countdown({ p1name, p2name, onDone }) {
+  const [n, setN] = useState(3);
+  useEffect(() => {
+    if (n === 0) { const t = setTimeout(onDone, 650); return () => clearTimeout(t); }
+    const t = setTimeout(() => setN(v => v - 1), 900);
+    return () => clearTimeout(t);
+  }, [n]);
+  const col = n === 0 ? "#4CAF50" : n === 1 ? "#FF6B6B" : n === 2 ? "#FFEAA7" : "#4ECDC4";
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(20,20,40,0.93)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", zIndex:200 }}>
+      <div style={{ color:"#fff", fontSize:"2rem", fontWeight:"bold", marginBottom:24, letterSpacing:2 }}>GET READY!</div>
+      <div style={{ display:"flex", gap:60, marginBottom:36 }}>
+        {[{nm:p1name,c:"#FF6B6B",e:"🔴"},{nm:p2name,c:"#45B7D1",e:"🔵"}].map(x => (
+          <div key={x.nm} style={{ textAlign:"center" }}>
+            <div style={{ fontSize:"2.5rem", marginBottom:8 }}>{x.e}</div>
+            <div style={{ color:x.c, fontWeight:"bold", fontSize:"1.3rem" }}>{x.nm}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize: n===0?"5rem":"8rem", fontWeight:"bold", color:col, animation:"cdPop 0.5s ease-out", transition:"color 0.2s" }}>
+        {n === 0 ? "GO! 🚀" : n}
+      </div>
+      <style>{`@keyframes cdPop{0%{transform:scale(0.3);opacity:0}60%{transform:scale(1.2)}100%{transform:scale(1);opacity:1}}`}</style>
+    </div>
+  );
+}
+
+// ── Battle Screen ──
+function BattleScreen({ p1name, p2name, mode, onDone }) {
+  const [phase, setPhase] = useState("countdown");
+  const [time, setTime] = useState(60);
+  const [active, setActive] = useState(false);
+  const [p1sc, setP1sc] = useState(0);
+  const [p2sc, setP2sc] = useState(0);
+  const [p1st, setP1st] = useState(0);
+  const [p2st, setP2st] = useState(0);
+  const [victory, setVictory] = useState(false);
+  const fin = useRef({ p1:0, s1:0, p2:0, s2:0, a1:{total:0,correct:0}, a2:{total:0,correct:0} });
+  const ivl = useRef(null);
+
+  const h1sc = useCallback(v => { fin.current.p1=v; setP1sc(v); }, []);
+  const h2sc = useCallback(v => { fin.current.p2=v; setP2sc(v); }, []);
+  const h1st = useCallback(v => { fin.current.s1=v; setP1st(v); }, []);
+  const h2st = useCallback(v => { fin.current.s2=v; setP2st(v); }, []);
+  const h1ac = useCallback(v => { fin.current.a1=v; }, []);
+  const h2ac = useCallback(v => { fin.current.a2=v; }, []);
+
+  const start = useCallback(() => {
+    setPhase("play"); setActive(true);
+    ivl.current = setInterval(() => setTime(t => { if(t<=1){clearInterval(ivl.current);return 0;} return t-1; }), 1000);
+  }, []);
+
+  useEffect(() => {
+    if (time === 0 && phase === "play") { setActive(false); setVictory(true); }
+  }, [time, phase]);
+
+  useEffect(() => () => clearInterval(ivl.current), []);
+
+  const tc = time>20?"#4ECDC4":time>10?"#f0a500":"#FF6B6B";
+  const winner = fin.current.p1>fin.current.p2?p1name:fin.current.p2>fin.current.p1?p2name:null;
+
+  return (
+    <div style={{ height:"100vh", display:"flex", flexDirection:"column", background:"linear-gradient(135deg,#1a1a2e,#16213e)", overflow:"hidden" }}>
+      {phase==="countdown" && <Countdown p1name={p1name} p2name={p2name} onDone={start} />}
+      {victory && <VictoryScreen winnerName={winner||""} isDraw={!winner} onDone={() => { setVictory(false); onDone(fin.current.p1,fin.current.s1,fin.current.p2,fin.current.s2,fin.current.a1,fin.current.a2); }} />}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"8px 20px", background:"rgba(0,0,0,0.45)", flexShrink:0 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <span style={{ fontSize:"1.5rem" }}>🔴</span>
+          <span style={{ fontSize:"1.6rem", fontWeight:"bold", color:"#FF6B6B" }}>{p1sc}</span>
+          <span style={{ color:"#FF6B6B", fontWeight:"bold", fontSize:"0.95rem" }}>{p1name}</span>
+        </div>
+        <div style={{ textAlign:"center" }}>
+          <div style={{ fontSize:"clamp(1.8rem,4vw,2.8rem)", fontWeight:"bold", color:tc, lineHeight:1 }}>{time}s</div>
+          <div style={{ height:7, width:160, background:"#333", borderRadius:4, marginTop:3 }}>
+            <div style={{ height:"100%", background:tc, borderRadius:4, width:((time/60)*100)+"%", transition:"width 1s linear" }} />
+          </div>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <span style={{ color:"#45B7D1", fontWeight:"bold", fontSize:"0.95rem" }}>{p2name}</span>
+          <span style={{ fontSize:"1.6rem", fontWeight:"bold", color:"#45B7D1" }}>{p2sc}</span>
+          <span style={{ fontSize:"1.5rem" }}>🔵</span>
+        </div>
+      </div>
+      <div style={{ flex:1, display:"flex", gap:14, padding:"12px 14px 8px", minHeight:0 }}>
+        <PlayerPanel key="p1" name={p1name} color="#FF6B6B" accentBg="#fff0f0" gameActive={active} mode={mode} onScoreChange={h1sc} onStarsChange={h1st} onStatsChange={h1ac} />
+        <div style={{ width:4, background:"rgba(255,255,255,0.15)", borderRadius:4, flexShrink:0 }} />
+        <PlayerPanel key="p2" name={p2name} color="#45B7D1" accentBg="#f0f8ff" gameActive={active} mode={mode} onScoreChange={h2sc} onStarsChange={h2st} onStatsChange={h2ac} />
+      </div>
+      <EnergyBar p1score={p1sc} p2score={p2sc} p1name={p1name} p2name={p2name} />
+    </div>
+  );
+}
+
+// ── Solo Screen ──
+function SoloScreen({ username, mode, onDone }) {
+  const init = useCallback(() => createPanelState(mode), []);
+  const [st, dispatch] = useReducer(panelReducer, null, init);
+  const { q, score, stars, flash, showStar, answered, total, correct } = st;
+  const [time, setTime] = useState(60);
+  const [victory, setVictory] = useState(false);
+  const ivl = useRef(null);
+  const nxt = useRef(null);
+
+  useEffect(() => {
+    ivl.current = setInterval(() => setTime(t => { if(t<=1){clearInterval(ivl.current);return 0;} return t-1; }), 1000);
+    return () => { clearInterval(ivl.current); clearTimeout(nxt.current); };
+  }, []);
+
+  useEffect(() => {
+    if (time === 0 && !victory) setVictory(true);
+  }, [time]);
+
+  const sched = (d) => { nxt.current = setTimeout(() => dispatch({ type:"NEXT", mode }), d); };
+
+  const pick = (c) => {
+    if (answered || time === 0) return;
+    if (c === q.answer) {
+      if (q.isSquare) { dispatch({ type:"CORRECT_STAR" }); setTimeout(() => { dispatch({ type:"HIDE_STAR" }); sched(150); }, 900); }
+      else { dispatch({ type:"CORRECT" }); sched(380); }
+    } else { dispatch({ type:"WRONG" }); sched(480); }
+  };
+
+  const tc = time>20?"#4ECDC4":time>10?"#f0a500":"#FF6B6B";
+  const bg = flash==="correct"?"#d4f7d4":flash==="wrong"?"#ffd5d5":"#fff";
+  const acc = total>0 ? Math.round((correct/total)*100) : null;
+
+  return (
+    <div style={S.center}>
+      {victory && <VictoryScreen winnerName={username} isDraw={false} onDone={() => { setVictory(false); onDone(score, stars, { total, correct }); }} />}
+      <div style={{ ...S.card, position:"relative", background:bg, transition:"background 0.25s" }}>
+        {showStar && <StarBurst />}
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+          <div style={{ fontSize:"0.95rem" }}>⭐ {stars}</div>
+          <div style={{ fontSize:"2rem", fontWeight:"bold", color:tc }}>{time}s</div>
+          <div style={{ fontSize:"0.95rem" }}>Score: {score}</div>
+        </div>
+        {acc !== null && <div style={{ fontSize:"0.85rem", color:"#777", marginBottom:6 }}>🎯 {acc}%</div>}
+        <div style={{ height:7, background:"#eee", borderRadius:4, marginBottom:14 }}>
+          <div style={{ height:"100%", background:tc, borderRadius:4, width:((time/60)*100)+"%", transition:"width 1s linear" }} />
+        </div>
+        {q.isSquare && <div style={{ background:"#fff8e1", border:"2px solid #ffd700", borderRadius:8, padding:"3px 10px", fontSize:"0.78rem", fontWeight:"bold", color:"#b8860b", marginBottom:8 }}>⭐ Squared! +2 pts!</div>}
+        <div style={{ fontSize:"2rem", fontWeight:"bold", color:"#333", padding:"10px 0", textAlign:"center" }}>{q.text} = ?</div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginTop:12 }}>
+          {q.choices.map((c, i) => {
+            let cbg = COLS4[i];
+            if (answered) cbg = c === q.answer ? "#4CAF50" : "#ccc";
+            return (
+              <button key={i} onPointerDown={() => pick(c)} style={{ ...S.choiceBtn, background:cbg, color:answered&&c!==q.answer?"#aaa":"#fff", touchAction:"manipulation", userSelect:"none" }}>
+                {c}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Admin ──
+function AdminConsole({ onClose }) {
+  const [pin, setPin] = useState("");
+  const [authed, setAuthed] = useState(false);
+  const [pinErr, setPinErr] = useState(false);
+  const [scores, setScores] = useState(() => loadStorage("ttb_scores"));
+  const [conf, setConf] = useState(null);
+  const [deleted, setDeleted] = useState(null);
+  const users = [...new Set(scores.map(s => s.username))].sort();
+
+  const tryPin = () => {
+    if (pin === ADMIN_PIN) { setAuthed(true); setPinErr(false); }
+    else { setPinErr(true); setPin(""); }
+  };
+  const remove = (u) => {
+    const upd = scores.filter(s => s.username !== u);
+    saveStorage("ttb_scores", upd); setScores(upd); setDeleted(u); setConf(null);
+    setTimeout(() => setDeleted(null), 2500);
+  };
+
+  const OV = { position:"fixed", inset:0, background:"rgba(0,0,0,0.55)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:300, padding:16 };
+  const MD = { background:"#fff", borderRadius:20, padding:28, width:"100%", boxShadow:"0 12px 40px rgba(0,0,0,0.25)", textAlign:"center" };
+  const SB = { padding:"7px 14px", borderRadius:8, border:"none", color:"#fff", fontWeight:"bold", cursor:"pointer", fontSize:"0.85rem" };
+
+  if (!authed) {
+    return (
+      <div style={OV}>
+        <div style={{ ...MD, maxWidth:340 }}>
+          <div style={{ fontSize:"2rem", marginBottom:8 }}>🔒</div>
+          <h2 style={S.title}>Teacher Admin</h2>
+          <p style={{ color:"#666", marginBottom:16, fontSize:"0.95rem" }}>Enter your PIN to continue.</p>
+          <input type="password" maxLength={6} placeholder="Enter PIN" value={pin} onChange={e => setPin(e.target.value)} onKeyDown={e => e.key==="Enter"&&tryPin()} style={{ ...S.input, borderColor:pinErr?"#FF6B6B":"#ddd", marginBottom:8 }} autoFocus />
+          {pinErr && <p style={{ color:"#FF6B6B", margin:"0 0 10px", fontSize:"0.9rem" }}>Incorrect PIN.</p>}
+          <button style={{ ...S.btn, background:"#45B7D1", marginTop:8 }} onClick={tryPin}>Unlock 🔓</button>
+          <button style={{ ...S.btn, background:"#eee", color:"#333", marginTop:10 }} onClick={onClose}>Cancel</button>
+          <p style={{ color:"#aaa", fontSize:"0.75rem", marginTop:14 }}>Default PIN: 1234</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={OV}>
+      <div style={{ ...MD, maxWidth:480 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+          <h2 style={{ ...S.title, margin:0 }}>🛡️ Admin Console</h2>
+          <button onClick={onClose} style={{ background:"none", border:"none", fontSize:"1.5rem", cursor:"pointer", color:"#999" }}>✕</button>
+        </div>
+        {deleted && <div style={{ background:"#d4f7d4", borderRadius:10, padding:"10px 14px", marginBottom:14, color:"#2a7a2a", fontWeight:"bold" }}>✅ "{deleted}" removed.</div>}
+        {users.length === 0
+          ? <p style={{ color:"#aaa", padding:"20px 0" }}>No players yet.</p>
+          : (
+            <>
+              <p style={{ color:"#666", marginBottom:12, fontSize:"0.9rem" }}>{users.length} player{users.length!==1?"s":""} on the leaderboard.</p>
+              <div style={{ maxHeight:320, overflowY:"auto", borderRadius:12, border:"1px solid #eee" }}>
+                {users.map((u, i) => {
+                  const cnt = scores.filter(s => s.username===u).length;
+                  const best = Math.max(...scores.filter(s => s.username===u).map(s => s.score));
+                  return (
+                    <div key={u} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"11px 14px", background:i%2===0?"#fff":"#fafafa", borderBottom:i<users.length-1?"1px solid #f0f0f0":"none" }}>
+                      <div>
+                        <div style={{ fontWeight:"bold" }}>{u}</div>
+                        <div style={{ color:"#999", fontSize:"0.8rem" }}>{cnt} games · best: {best}</div>
+                      </div>
+                      {conf===u
+                        ? <div style={{ display:"flex", gap:6 }}><button onClick={()=>remove(u)} style={{ ...SB, background:"#FF6B6B" }}>Confirm 🗑️</button><button onClick={()=>setConf(null)} style={{ ...SB, background:"#aaa" }}>Cancel</button></div>
+                        : <button onClick={()=>setConf(u)} style={{ ...SB, background:"#FF6B6B" }}>Remove</button>
+                      }
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )
+        }
+        <button style={{ ...S.btn, background:"#96CEB4", marginTop:16 }} onClick={onClose}>Done ✓</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Simple Screens ──
+function HomeScreen({ username, onChangeUser, onSolo, onBattle, onLeaderboard, onAdmin }) {
+  return (
+    <div style={S.center}>
+      <div style={S.card}>
+        <div style={{ fontSize:"3.5rem", marginBottom:4 }}>🧮</div>
+        <h1 style={S.title}>Times Table Blast!</h1>
+        <p style={{ color:"#666", marginBottom:20 }}>Hello, <b>{username}</b>! <span style={{ cursor:"pointer", color:"#45B7D1", fontSize:"0.85rem" }} onClick={onChangeUser}>(not you?)</span></p>
+        <button style={{ ...S.btn, background:"#FF6B6B" }} onClick={onSolo}>▶ Solo Game</button>
+        <button style={{ ...S.btn, background:"#45B7D1", marginTop:12 }} onClick={onBattle}>⚔️ Live Battle!</button>
+        <button style={{ ...S.btn, background:"#96CEB4", marginTop:12 }} onClick={onLeaderboard}>🏆 Leaderboard</button>
+        <button style={{ ...S.btn, background:"#bbb", color:"#444", marginTop:20, fontSize:"0.85rem", padding:"10px 0" }} onClick={onAdmin}>🛡️ Teacher Admin</button>
+      </div>
+    </div>
+  );
+}
+
+function NameScreen({ label, onDone, existing }) {
+  const [name, setName] = useState("");
+  return (
+    <div style={S.center}>
+      <div style={S.card}>
+        <div style={{ fontSize:"2.5rem", marginBottom:8 }}>👤</div>
+        <h2 style={S.title}>{label || "What's your name?"}</h2>
+        <input style={S.input} maxLength={16} placeholder="Enter username…" value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key==="Enter"&&name.trim()&&onDone(name.trim())} autoFocus />
+        <button style={{ ...S.btn, background:"#FF6B6B", marginTop:16 }} disabled={!name.trim()} onClick={() => onDone(name.trim())}>Let's Go! 🚀</button>
+        {existing && <button style={{ ...S.btn, background:"#eee", color:"#333", marginTop:10 }} onClick={() => onDone(existing)}>Back</button>}
+      </div>
+    </div>
+  );
+}
+
+function AccBadge({ correct, total, seconds }) {
+  if (!total) return null;
+  const pct = Math.round((correct / total) * 100);
+  const em = pct===100?"🎯":pct>=80?"✅":pct>=60?"👍":"💪";
+  const speed = total > 0 ? (seconds / total).toFixed(1) : null;
+  return (
+    <div style={{ display:"flex", gap:6, flexWrap:"wrap", justifyContent:"center", margin:"4px 0" }}>
+      <div style={{ background:"#f0f0f0", borderRadius:10, padding:"4px 12px", fontSize:"0.9rem", color:"#555" }}>
+        {em} {pct}% <span style={{ color:"#aaa", fontSize:"0.8rem" }}>({correct}/{total})</span>
+      </div>
+      {speed && (
+        <div style={{ background:"#e8f4fd", borderRadius:10, padding:"4px 12px", fontSize:"0.9rem", color:"#2980b9" }}>
+          ⚡ {speed}s per answer
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ResultScreen({ p1name, p1score, p1stars, p1stats, p2name, p2score, p2stars, p2stats, isBattle, onHome, onAgain }) {
+  return (
+    <div style={S.center}>
+      <div style={S.card}>
+        <div style={{ fontSize:"3rem" }}>{isBattle ? (p1score!==p2score?"🏆":"🤝") : (p1score>=20?"🏆":p1score>=10?"🌟":"💪")}</div>
+        <h2 style={S.title}>Results</h2>
+        {isBattle ? (
+          <>
+            <div style={{ marginBottom:12 }}>
+              <div style={S.resRow}><b style={{ color:"#FF6B6B" }}>🔴 {p1name}</b>: {p1score} pts {Array(p1stars).fill("⭐").join("")}<div><AccBadge correct={p1stats?.correct||0} total={p1stats?.total||0} seconds={60} /></div></div>
+              <div style={S.resRow}><b style={{ color:"#45B7D1" }}>🔵 {p2name}</b>: {p2score} pts {Array(p2stars).fill("⭐").join("")}<div><AccBadge correct={p2stats?.correct||0} total={p2stats?.total||0} seconds={60} /></div></div>
+            </div>
+            <div style={{ fontSize:"1.4rem", fontWeight:"bold", marginBottom:12, color:p1score>p2score?"#FF6B6B":p2score>p1score?"#45B7D1":"#FFA500" }}>
+              {p1score>p2score?"🎉 "+p1name+" wins!":p2score>p1score?"🎉 "+p2name+" wins!":"🤝 It's a draw!"}
+            </div>
+          </>
+        ) : (
+          <>
+            <p style={{ fontSize:"1.3rem", margin:"8px 0" }}>Score: <b>{p1score}</b></p>
+            <p style={{ fontSize:"1.1rem", margin:"6px 0" }}>Stars: <b>{p1stars} ⭐</b></p>
+            <div style={{ margin:"8px 0" }}><AccBadge correct={p1stats?.correct||0} total={p1stats?.total||0} seconds={60} /></div>
+          </>
+        )}
+        <button style={{ ...S.btn, background:"#FF6B6B", marginTop:8 }} onClick={onAgain}>Play Again 🔁</button>
+        <button style={{ ...S.btn, background:"#96CEB4", marginTop:10 }} onClick={onHome}>Home 🏠</button>
+      </div>
+    </div>
+  );
+}
+
+function LeaderboardScreen({ onHome }) {
+  const [tab, setTab] = useState("daily");
+  const all = loadStorage("ttb_scores");
+  const d = new Date(); d.setHours(0,0,0,0);
+  const w = new Date(); w.setDate(w.getDate()-w.getDay()); w.setHours(0,0,0,0);
+  const since = tab==="daily"?d.getTime():tab==="weekly"?w.getTime():0;
+  const rows = all.filter(e => e.ts>=since).sort((a,b)=>b.score-a.score).slice(0,10);
+  return (
+    <div style={S.center}>
+      <div style={{ ...S.card, maxWidth:420 }}>
+        <h2 style={S.title}>🏆 Leaderboard</h2>
+        <div style={{ display:"flex", gap:8, marginBottom:16 }}>
+          {["daily","weekly","alltime"].map(t => (
+            <button key={t} style={{ ...S.tabBtn, background:tab===t?"#FF6B6B":"#eee", color:tab===t?"#fff":"#333" }} onClick={() => setTab(t)}>
+              {t==="daily"?"Today":t==="weekly"?"Week":"All Time"}
+            </button>
+          ))}
+        </div>
+        {rows.length===0
+          ? <p style={{ color:"#aaa" }}>No scores yet!</p>
+          : rows.map((e,i) => (
+            <div key={i} style={{ ...S.lbRow, background:i<3?["#FFF3C4","#F0F0F0","#FFE8D6"][i]:"#f9f9f9" }}>
+              <span style={{ minWidth:28 }}>{["🥇","🥈","🥉"][i]||i+1}</span>
+              <span style={{ flex:1, textAlign:"left", paddingLeft:8, fontWeight:i<3?"bold":"normal" }}>{e.username}</span>
+              <span style={{ fontWeight:"bold" }}>{e.score}</span>
+              {e.speed && <span style={{ marginLeft:6, fontSize:"0.78rem", color:"#2980b9", whiteSpace:"nowrap" }}>⚡{e.speed}s</span>}
+              <span style={{ marginLeft:6, fontSize:"0.8rem" }}>{Array(e.stars||0).fill("⭐").join("")}</span>
+            </div>
+          ))
+        }
+        <button style={{ ...S.btn, background:"#96CEB4", marginTop:16 }} onClick={onHome}>Home 🏠</button>
+      </div>
+    </div>
+  );
+}
+
+// ── App ──
+export default function App() {
+  const [screen, setScreen] = useState("init");
+  const [user, setUser] = useState(() => localStorage.getItem("ttb_user") || "");
+  const [p2, setP2] = useState("");
+  const [mode, setMode] = useState(null);
+  const [result, setResult] = useState(null);
+  const [admin, setAdmin] = useState(false);
+
+  useEffect(() => setScreen(user ? "home" : "name"), []);
+
+  const saveScore = (u, sc, st, stats) => {
+    const arr = loadStorage("ttb_scores");
+    const speed = stats && stats.total > 0 ? parseFloat((60 / stats.total).toFixed(1)) : null;
+    arr.push({ username:u, score:sc, stars:st, speed, ts:Date.now() });
+    saveStorage("ttb_scores", arr);
+  };
+
+  return (
+    <>
+      {admin && <AdminConsole onClose={() => setAdmin(false)} />}
+
+      {screen==="init" && null}
+
+      {screen==="name" && (
+        <NameScreen label="What's your name?" existing={user} onDone={n => { setUser(n); localStorage.setItem("ttb_user",n); setScreen("home"); }} />
+      )}
+
+      {screen==="home" && (
+        <HomeScreen username={user} onChangeUser={() => setScreen("name")} onSolo={() => setScreen("soloMode")} onBattle={() => setScreen("battleMode")} onLeaderboard={() => setScreen("leaderboard")} onAdmin={() => setAdmin(true)} />
+      )}
+
+      {screen==="soloMode" && (
+        <ModeSelector label="Solo Game – Choose Mode" onSelect={m => { setMode(m); setScreen("solo"); }} />
+      )}
+
+      {screen==="battleMode" && (
+        <ModeSelector label="Live Battle – Choose Mode" onSelect={m => { setMode(m); setScreen("p2name"); }} />
+      )}
+
+      {screen==="p2name" && (
+        <NameScreen label="Player 2, enter your name!" onDone={n => { setP2(n); setScreen("battle"); }} />
+      )}
+
+      {screen==="solo" && mode && (
+        <SoloScreen username={user} mode={mode} onDone={(sc,st,stats) => { saveScore(user,sc,st,stats); setResult({ p1score:sc, p1stars:st, p1stats:stats, isBattle:false }); setScreen("result"); }} />
+      )}
+
+      {screen==="battle" && mode && (
+        <BattleScreen p1name={user} p2name={p2} mode={mode} onDone={(p1sc,p1st,p2sc,p2st,a1,a2) => { saveScore(user,p1sc,p1st,a1); saveScore(p2,p2sc,p2st,a2); setResult({ p1score:p1sc, p1stars:p1st, p1stats:a1, p2score:p2sc, p2stars:p2st, p2stats:a2, isBattle:true }); setScreen("result"); }} />
+      )}
+
+      {screen==="result" && result && (
+        <ResultScreen p1name={user} p2name={p2} {...result} onHome={() => setScreen("home")} onAgain={() => setScreen(result.isBattle ? "battleMode" : "soloMode")} />
+      )}
+
+      {screen==="leaderboard" && (
+        <LeaderboardScreen onHome={() => setScreen("home")} />
+      )}
+    </>
+  );
+}
+
+const S = {
+  center: { minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"linear-gradient(135deg,#667eea22,#764ba222)", padding:16 },
+  card:   { background:"#fff", borderRadius:20, padding:28, boxShadow:"0 8px 32px rgba(0,0,0,0.12)", width:"100%", maxWidth:400, textAlign:"center" },
+  title:  { fontSize:"1.7rem", fontWeight:"bold", margin:"0 0 16px", color:"#333" },
+  btn:    { width:"100%", padding:"14px 0", borderRadius:12, border:"none", color:"#fff", fontSize:"1.1rem", fontWeight:"bold", cursor:"pointer", boxShadow:"0 3px 8px rgba(0,0,0,0.13)" },
+  choiceBtn: { padding:"16px 8px", borderRadius:14, border:"none", fontSize:"1.5rem", fontWeight:"bold", cursor:"pointer", boxShadow:"0 2px 6px rgba(0,0,0,0.12)" },
+  input:  { width:"100%", padding:"12px 16px", borderRadius:10, border:"2px solid #ddd", fontSize:"1.1rem", boxSizing:"border-box", outline:"none" },
+  tabBtn: { flex:1, padding:"8px 0", borderRadius:8, border:"none", fontWeight:"bold", cursor:"pointer", fontSize:"0.85rem" },
+  lbRow:  { display:"flex", alignItems:"center", padding:"9px 12px", borderRadius:10, marginBottom:6 },
+  resRow: { fontSize:"1.05rem", margin:"6px 0", padding:"8px 12px", background:"#f5f5f5", borderRadius:8 },
+};
